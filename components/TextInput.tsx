@@ -19,16 +19,30 @@ export default function TextInput({ value, onChange, placeholder }: TextInputPro
   const onDrop = (acceptedFiles: File[]) => {
     const file = acceptedFiles[0]
     if (file) {
-      if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+      // Support more file types including plain text without extension
+      const isTextFile = file.type.startsWith('text/') || 
+                        file.name.endsWith('.txt') || 
+                        file.name.endsWith('.md') ||
+                        file.name.endsWith('.markdown') ||
+                        file.type === '' // Some text files have no MIME type
+      
+      if (isTextFile) {
         const reader = new FileReader()
         reader.onload = (e) => {
           const text = e.target?.result as string
-          onChange(text)
-          toast.success(`Loaded ${file.name}`)
+          if (text) {
+            onChange(text)
+            toast.success(`Loaded ${file.name} (${text.length} characters)`)
+          } else {
+            toast.error('File appears to be empty')
+          }
+        }
+        reader.onerror = () => {
+          toast.error('Error reading file')
         }
         reader.readAsText(file)
       } else {
-        toast.error('Please upload a text file (.txt, .md)')
+        toast.error(`Unsupported file type. Please upload a text file (.txt, .md, etc.). File type: ${file.type || 'unknown'}`)
       }
     }
   }
@@ -37,11 +51,11 @@ export default function TextInput({ value, onChange, placeholder }: TextInputPro
     onDrop,
     accept: {
       'text/plain': ['.txt'],
-      'text/markdown': ['.md'],
-      'text/*': []
+      'text/markdown': ['.md', '.markdown'],
+      'text/*': [],
+      'application/octet-stream': [] // Some text files are detected as this
     },
-    multiple: false,
-    noClick: true
+    multiple: false
   })
 
   const handleClear = () => {
@@ -134,16 +148,6 @@ export default function TextInput({ value, onChange, placeholder }: TextInputPro
             </motion.button>
           ))}
         </div>
-      </div>
-
-      {/* Format Tips */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <h4 className="font-medium text-blue-800 mb-2">💡 Formatting Tips</h4>
-        <ul className="text-sm text-blue-700 space-y-1">
-          <li>• Use <code className="bg-blue-100 px-1 rounded">[S1]</code> and <code className="bg-blue-100 px-1 rounded">[S2]</code> for different speakers</li>
-          <li>• Add emotions like <code className="bg-blue-100 px-1 rounded">(laughs)</code>, <code className="bg-blue-100 px-1 rounded">(sighs)</code>, <code className="bg-blue-100 px-1 rounded">(whispers)</code></li>
-          <li>• Keep sections under 20 seconds of speech for best results</li>
-        </ul>
       </div>
     </div>
   )

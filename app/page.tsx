@@ -19,7 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import TextInput from '@/components/TextInput'
 import AudioPreview from '@/components/AudioPreview'
-import AnnotationSettings from '@/components/AnnotationSettings'
+import TTSSettings from '@/components/TTSSettings'
 import toast from 'react-hot-toast'
 
 interface ProcessingStep {
@@ -36,34 +36,26 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [currentStep, setCurrentStep] = useState(0)
-  const [annotationSettings, setAnnotationSettings] = useState({
-    addEmotions: true,
-    emotionIntensity: 0.7,
-    addPauses: true,
-    speakerVariation: true
+  const [ttsSettings, setTtsSettings] = useState({
+    voice: 'default',
+    exaggeration: 0.5,
+    cfg_weight: 0.5,
+    quality: 'high'
   })
 
   const processingSteps: ProcessingStep[] = [
     {
-      id: 'analyze',
-      title: 'Analyzing Text',
-      description: 'Understanding context and structure',
+      id: 'prepare',
+      title: 'Preparing Text',
+      description: 'Optimizing text for speech synthesis',
       icon: FileText,
-      completed: false,
-      processing: false
-    },
-    {
-      id: 'annotate',
-      title: 'Adding Emotions',
-      description: 'Inserting (laughs), (sighs), and pauses',
-      icon: Sparkles,
       completed: false,
       processing: false
     },
     {
       id: 'synthesize',
       title: 'Generating Audio',
-      description: 'Creating high-quality speech with Dia TTS',
+      description: 'Creating natural speech with Chatterbox TTS',
       icon: Volume2,
       completed: false,
       processing: false
@@ -71,7 +63,7 @@ export default function Home() {
     {
       id: 'finalize',
       title: 'Finalizing',
-      description: 'Preparing your audiobook',
+      description: 'Preparing your audiobook for download',
       icon: Star,
       completed: false,
       processing: false
@@ -104,7 +96,7 @@ export default function Home() {
             },
             body: JSON.stringify({
               text,
-              settings: annotationSettings
+              settings: ttsSettings
             }),
           })
 
@@ -143,12 +135,12 @@ export default function Home() {
           >
             <BookOpen className="w-12 h-12 text-primary-500" />
           </motion.div>
-          <h1 className="text-5xl font-bold bg-gradient-to-r from-primary-600 to-purple-600 bg-clip-text text-transparent">
+          <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent">
             Audiobook Studio
           </h1>
         </div>
         <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-          Transform your text into engaging audiobooks with AI-powered emotional annotations and ultra-realistic voice synthesis
+          Transform your text into engaging audiobooks with Chatterbox TTS - just plain text, no complex formatting required!
         </p>
       </motion.div>
 
@@ -174,9 +166,9 @@ export default function Home() {
               placeholder="Paste your text here or upload a file..."
             />
 
-            <AnnotationSettings 
-              settings={annotationSettings}
-              onChange={setAnnotationSettings}
+            <TTSSettings 
+              settings={ttsSettings}
+              onChange={setTtsSettings}
             />
 
             <Button
@@ -289,18 +281,18 @@ export default function Home() {
           {[
             {
               icon: Sparkles,
-              title: "Smart Annotations",
-              description: "AI automatically adds emotional cues like (laughs), (sighs), and natural pauses"
+              title: "Simple & Powerful",
+              description: "Just paste plain text - Chatterbox automatically handles emotions and natural speech patterns"
             },
             {
               icon: Volume2,
-              title: "Ultra-Realistic Voice",
-              description: "Powered by Dia TTS for natural, engaging speech synthesis"
+              title: "State-of-the-Art Voice",
+              description: "Powered by Chatterbox TTS for incredibly natural and engaging speech synthesis"
             },
             {
               icon: Settings,
-              title: "Full Customization",
-              description: "Control emotion intensity, speaker variation, and audio settings"
+              title: "Voice Customization",
+              description: "Choose from multiple voices, adjust speed, and control quality settings"
             }
           ].map((feature, index) => (
             <motion.div
@@ -310,8 +302,8 @@ export default function Home() {
               transition={{ delay: 0.8 + index * 0.1 }}
               className="text-center"
             >
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-primary-500 to-purple-500 rounded-full mb-4">
-                <feature.icon className="w-8 h-8 text-white" />
+              <div className="inline-flex items-center justify-center mb-4">
+                <feature.icon className="w-12 h-12 text-blue-600" />
               </div>
               <h3 className="text-xl font-semibold text-gray-800 mb-2">{feature.title}</h3>
               <p className="text-gray-600">{feature.description}</p>

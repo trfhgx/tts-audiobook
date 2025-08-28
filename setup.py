@@ -34,257 +34,63 @@ def ask_yes_no(question, default="y"):
             return False
         print("Please answer 'y' or 'n'")
 
-def check_ollama():
-    """Check if Ollama is installed"""
-    return run_command("which ollama", check=False) is not None
+# Ollama and annotation functions are no longer needed with Chatterbox
+# since it doesn't require text annotations or speaker tags
 
-def get_ollama_models():
-    """Get list of installed Ollama models"""
-    if not check_ollama():
-        return []
-    
-    result = run_command("ollama list", check=False)
-    if not result:
-        return []
-    
-    models = []
-    lines = result.split('\n')[1:]  # Skip header
-    for line in lines:
-        if line.strip():
-            model_name = line.split()[0]
-            if model_name != "NAME":
-                models.append(model_name)
-    
-    return models
-
-def install_ollama_model(model_name):
-    """Install an Ollama model with confirmation"""
-    print(f"\n📦 About to install Ollama model: {model_name}")
-    print(f"This will download and install the model (may take several minutes)")
-    
-    if not ask_yes_no("Do you want to proceed with installation?"):
-        return False
-        
-    print(f"Installing {model_name}...")
-    try:
-        # Run ollama pull command
-        result = subprocess.run(f"ollama pull {model_name}", shell=True, check=True)
-        print(f"✅ Successfully installed {model_name}")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to install {model_name}")
-        print(f"Error: {e}")
-        return False
-
-def select_annotation_model():
-    """Interactive model selection for text annotation"""
-    print("\n🤖 TEXT ANNOTATION MODEL SETUP")
-    print("=" * 50)
-    
-    if not check_ollama():
-        print("❌ Ollama is not installed.")
-        print("Ollama is required for local AI text annotation.")
-        print("Install from: https://ollama.ai")
-        
-        if ask_yes_no("Do you want to continue without text annotation?"):
-            return "none"
-        else:
-            return None
-    
-    print("✅ Ollama is installed")
-    models = get_ollama_models()
-    
-    print(f"\n📋 Currently installed models: {len(models)}")
-    if models:
-        for i, model in enumerate(models, 1):
-            print(f"  {i}. {model}")
-    else:
-        print("  No models found")
-    
-    # Recommended models for text annotation
-    recommended = [
-        ("llama3.2:1b", "Very small and fast (1.3GB)"),
-        ("llama3.2:3b", "Small with good quality (2GB)"),
-        ("phi3:mini", "Microsoft's efficient model (2.3GB)"),
-        ("qwen2:1.5b", "Alibaba's compact model (934MB)"),
-        ("tinyllama:1.1b", "Tiny model for basic tasks (637MB)")
-    ]
-    
-    print(f"\n🎯 Recommended models for text annotation:")
-    for i, (model, desc) in enumerate(recommended, 1):
-        installed = "✅" if model in models else "📦"
-        print(f"  {i}. {installed} {model} - {desc}")
-    
-    print("\nOptions:")
-    if models:
-        print("  A. Use an existing installed model")
-    print("  B. Install a new recommended model")
-    print("  C. Skip text annotation (manual mode)")
-    
-    while True:
-        choice = input("\nSelect option (A/B/C): ").strip().upper()
-        
-        if choice == "A" and models:
-            print(f"\nInstalled models:")
-            for i, model in enumerate(models, 1):
-                print(f"  {i}. {model}")
-            
-            try:
-                model_choice = int(input("Select model number: ")) - 1
-                if 0 <= model_choice < len(models):
-                    selected = models[model_choice]
-                    print(f"Selected: {selected}")
-                    return selected
-                else:
-                    print("❌ Invalid selection")
-            except ValueError:
-                print("❌ Invalid input")
-                
-        elif choice == "B":
-            print(f"\nRecommended models:")
-            for i, (model, desc) in enumerate(recommended, 1):
-                print(f"  {i}. {model} - {desc}")
-            
-            try:
-                model_choice = int(input("Select model to install (number): ")) - 1
-                if 0 <= model_choice < len(recommended):
-                    model_name = recommended[model_choice][0]
-                    if install_ollama_model(model_name):
-                        return model_name
-                    else:
-                        print("Installation failed. Try another model or skip.")
-                else:
-                    print("❌ Invalid selection")
-            except ValueError:
-                print("❌ Invalid input")
-                
-        elif choice == "C":
-            print("⚠️  Skipping text annotation setup")
-            return "none"
-        else:
-            print("❌ Invalid option. Please choose A, B, or C")
-
-def setup_dia_tts():
-    """Setup Dia TTS from the GitHub repo with confirmation"""
-    print("\n🎵 DIA TTS SETUP")
-    print("=" * 30)
-    
-    # Step 1: Clone/update repository
-    if Path("dia").exists():
-        print("✅ Dia TTS repository already exists")
-        if ask_yes_no("Do you want to update it?"):
-            print("Updating Dia TTS repository...")
-            os.chdir("dia")
-            try:
-                result = subprocess.run(["git", "pull"], capture_output=True, text=True, check=True)
-                os.chdir("..")
-                if "Already up to date" in result.stdout or "Fast-forward" in result.stdout:
-                    print("✅ Dia TTS repository updated")
-                else:
-                    print("✅ Dia TTS repository updated")
-            except subprocess.CalledProcessError as e:
-                os.chdir("..")
-                print(f"❌ Failed to update Dia TTS: {e}")
-                return False
-    else:
-        print("📦 Dia TTS repository not found")
-        print("This will clone the Dia TTS repository from GitHub")
-        print("Repository: https://github.com/nari-labs/dia.git")
-        print("Note: This contains the Dia TTS code and interface")
-        
-        if ask_yes_no("Do you want to clone Dia TTS repository?"):
-            print("Cloning Dia TTS repository...")
-            try:
-                subprocess.run(["git", "clone", "https://github.com/nari-labs/dia.git"], check=True)
-                print("✅ Successfully cloned Dia TTS repository")
-            except subprocess.CalledProcessError as e:
-                print(f"❌ Failed to clone Dia repository: {e}")
-                return False
-        else:
-            print("⚠️  Skipping Dia TTS setup")
-            return False
-    
-    # Step 2: Download TTS model weights
-    print("\n📥 DIA TTS MODEL DOWNLOAD")
-    print("=" * 40)
-    print("The Dia TTS model weights need to be downloaded from HuggingFace")
-    print("Model: nari-labs/Dia-1.6B-0626")
-    print("Size: ~6.4GB (this will take time depending on your internet)")
-    print("This enables high-quality text-to-speech generation")
+def setup_chatterbox_tts():
+    """Setup Chatterbox TTS - much simpler than Dia!"""
+    print("\n🎵 CHATTERBOX TTS SETUP")
+    print("=" * 35)
+    print("✨ Chatterbox is a state-of-the-art open-source TTS model")
+    print("✅ No complex setup needed - installs directly via pip")
+    print("✅ No manual model downloads required")
+    print("✅ No speaker tags or annotations needed")
+    print("✅ Just plain text → high-quality speech!")
     print("")
-    print("The model will be saved to ./models/dia-tts/ in this project")
     
-    if ask_yes_no("Do you want to download the Dia TTS model?"):
-        print("Downloading Dia TTS model... (this may take 10-30 minutes)")
-        
-        # Use Python to download the model
-        download_script = '''
-import sys
-import os
-from pathlib import Path
-try:
-    from transformers import DiaForConditionalGeneration, AutoProcessor
-    
-    # Create models directory
-    models_dir = Path("models/dia-tts")
-    models_dir.mkdir(parents=True, exist_ok=True)
-    
-    print("🔄 Downloading Dia TTS model and processor...")
-    print(f"📁 Saving to: {models_dir.absolute()}")
-    model_name = "nari-labs/Dia-1.6B-0626"
-    
-    # Download processor first (includes tokenizer and audio configs)
-    print("📝 Downloading processor (tokenizer + audio configs)...")
-    processor = AutoProcessor.from_pretrained(
-        model_name, 
-        cache_dir=str(models_dir)
-    )
-    print("✅ Processor downloaded")
-    
-    # Download model to local directory
-    print("🎵 Downloading Dia TTS model (this will take a while)...")
-    print("Progress will be shown below:")
-    model = DiaForConditionalGeneration.from_pretrained(
-        model_name, 
-        cache_dir=str(models_dir)
-    )
-    print("✅ Model downloaded successfully")
-    print(f"📁 Model saved to: {models_dir.absolute()}")
-    print("🎉 Dia TTS is ready to use!")
-    
-except ImportError as e:
-    print(f"❌ Missing dependencies: {e}")
-    print("Please ensure transformers is installed")
-    sys.exit(1)
-except Exception as e:
-    print(f"❌ Failed to download model: {e}")
-    sys.exit(1)
-'''
+    if ask_yes_no("Do you want to install Chatterbox TTS?"):
+        print("📦 Installing Chatterbox TTS...")
         
         try:
-            # Run the download in the virtual environment
+            # Install chatterbox-tts in the virtual environment
             venv_python = Path("backend/venv/bin/python")
             if venv_python.exists():
-                with open("temp_download.py", "w") as f:
-                    f.write(download_script)
+                print("🔧 Installing chatterbox-tts in virtual environment...")
+                subprocess.run([str(venv_python), "-m", "pip", "install", "chatterbox-tts"], check=True)
+                print("✅ Chatterbox TTS installed successfully!")
                 
-                subprocess.run([str(venv_python), "temp_download.py"], check=True)
-                os.remove("temp_download.py")
-                print("✅ Dia TTS model downloaded successfully")
+                # Test the installation
+                print("🧪 Testing Chatterbox installation...")
+                test_script = '''
+try:
+    from chatterbox.tts import ChatterboxTTS
+    print("✅ Chatterbox import successful!")
+    print("ℹ️  Model will be downloaded automatically on first use")
+except ImportError as e:
+    print(f"❌ Import failed: {e}")
+    exit(1)
+'''
+                with open("test_chatterbox.py", "w") as f:
+                    f.write(test_script)
+                
+                subprocess.run([str(venv_python), "test_chatterbox.py"], check=True)
+                os.remove("test_chatterbox.py")
+                
+                print("🎉 Chatterbox TTS is ready!")
+                print("💡 The model will download automatically on first use (~2GB)")
                 return True
             else:
                 print("❌ Virtual environment not found. Please run virtual environment setup first.")
                 return False
                 
         except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to download Dia TTS model: {e}")
-            if os.path.exists("temp_download.py"):
-                os.remove("temp_download.py")
+            print(f"❌ Failed to install Chatterbox TTS: {e}")
+            if os.path.exists("test_chatterbox.py"):
+                os.remove("test_chatterbox.py")
             return False
     else:
-        print("⚠️  Skipping Dia TTS model download")
-        print("Note: TTS will not work without the model")
-        return True  # Repository setup still succeeded
+        print("⚠️  Skipping Chatterbox TTS setup")
+        return False
 
 def create_virtual_environment():
     """Create and setup virtual environment"""
@@ -395,35 +201,23 @@ def install_node_dependencies():
         print("⚠️  Skipping Node.js dependencies")
         return False
 
-def update_env_file(model_name):
-    """Update .env.local with selected model"""
+def update_env_file():
+    """Update .env.local with backend URL"""
     print("\n⚙️  CONFIGURATION")
     print("=" * 25)
     
     env_file = Path(".env.local")
     
-    config_info = f"""
+    config_info = """
 Configuration to be written to .env.local:
-  ANNOTATION_MODEL={model_name}
   PYTHON_BACKEND_URL=http://localhost:8000
+  TTS_ENGINE=chatterbox
 """
     print(config_info)
     
     if ask_yes_no("Do you want to create/update the configuration file?"):
-        if env_file.exists():
-            content = env_file.read_text()
-            lines = content.split('\n')
-            updated = False
-            for i, line in enumerate(lines):
-                if line.startswith('ANNOTATION_MODEL='):
-                    lines[i] = f'ANNOTATION_MODEL={model_name}'
-                    updated = True
-                    break
-            if not updated:
-                lines.append(f'ANNOTATION_MODEL={model_name}')
-            env_file.write_text('\n'.join(lines))
-        else:
-            env_file.write_text(f'ANNOTATION_MODEL={model_name}\nPYTHON_BACKEND_URL=http://localhost:8000\n')
+        env_content = "PYTHON_BACKEND_URL=http://localhost:8000\nTTS_ENGINE=chatterbox\n"
+        env_file.write_text(env_content)
         
         print("✅ Configuration updated")
         return True
@@ -441,41 +235,33 @@ def main():
     print("This interactive setup will guide you through configuring your audiobook studio.")
     print("You can choose what to install and configure at each step.\n")
     
-    # Step 1: Text annotation model selection
-    print("STEP 1/6: Text Annotation Model")
-    model = select_annotation_model()
-    if model is None:
-        print("❌ Setup cancelled")
-        return
+    # Step 1: Configuration
+    print("STEP 1/5: Configuration")
+    config_updated = update_env_file()
     
-    # Step 2: Update configuration
-    print("\nSTEP 2/6: Configuration")
-    config_updated = update_env_file(model)
-    
-    # Step 3: Virtual environment
-    print("\nSTEP 3/6: Python Virtual Environment")
+    # Step 2: Virtual environment
+    print("\nSTEP 2/5: Python Virtual Environment")
     venv_created = create_virtual_environment()
     
-    # Step 4: Python dependencies
-    print("\nSTEP 4/6: Python Dependencies")
+    # Step 3: Python dependencies
+    print("\nSTEP 3/5: Python Dependencies")
     python_deps = install_dependencies() if venv_created else False
     
-    # Step 5: Dia TTS setup
-    print("\nSTEP 5/6: Dia TTS Setup")
-    dia_setup = setup_dia_tts()
+    # Step 4: Chatterbox TTS setup
+    print("\nSTEP 4/5: Chatterbox TTS Setup")
+    chatterbox_setup = setup_chatterbox_tts()
     
-    # Step 6: Node.js dependencies
-    print("\nSTEP 6/6: Node.js Dependencies")
+    # Step 5: Node.js dependencies
+    print("\nSTEP 5/5: Node.js Dependencies")
     node_deps = install_node_dependencies()
     
     # Summary
     print("\n🎉 SETUP SUMMARY")
     print("=" * 30)
-    print(f"✅ Text annotation model: {model}")
     print(f"{'✅' if config_updated else '⚠️ '} Configuration: {'Updated' if config_updated else 'Skipped'}")
     print(f"{'✅' if venv_created else '⚠️ '} Virtual environment: {'Created' if venv_created else 'Skipped'}")
     print(f"{'✅' if python_deps else '⚠️ '} Python deps: {'Installed' if python_deps else 'Skipped'}")
-    print(f"{'✅' if dia_setup else '⚠️ '} Dia TTS: {'Ready' if dia_setup else 'Skipped'}")
+    print(f"{'✅' if chatterbox_setup else '⚠️ '} Chatterbox TTS: {'Ready' if chatterbox_setup else 'Skipped'}")
     print(f"{'✅' if node_deps else '⚠️ '} Node.js deps: {'Installed' if node_deps else 'Skipped'}")
     
     print(f"\n🎯 NEXT STEPS")
@@ -498,11 +284,8 @@ def main():
             print("  - Install Node.js dependencies: npm install")
         print("  - Then start backend and frontend in separate terminals")
     
-    if model == "none":
-        print("\n⚠️  Note: Text annotation is disabled. You'll need to manually add emotions to your text.")
-    
-    if not dia_setup:
-        print("\n⚠️  Note: Dia TTS is not set up. Audio generation may not work.")
+    if not chatterbox_setup:
+        print("\n⚠️  Note: Chatterbox TTS is not set up. Audio generation may not work.")
 
 if __name__ == "__main__":
     main()

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
 Audiobook Studio Python Backend
-FastAPI server for text annotation and TTS generation
+FastAPI server for text-to-speech generation using Chatterbox TTS
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 import torch
 import torchaudio
 import numpy as np
-import requests
 import io
 import logging
 from typing import Optional
@@ -19,6 +18,7 @@ import uvicorn
 import os
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # Load environment variables from parent directory
 env_file = Path(__file__).parent.parent / ".env.local"
@@ -42,9 +42,25 @@ app.add_middleware(
 )
 
 # Global variables
-annotation_model = None
 tts_model = None
-tts_processor = None
+
+# Create output directory for generated audio
+OUTPUT_DIR = Path("generated_audio")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Create voice samples directory
+VOICE_SAMPLES_DIR = Path("voice_samples")
+VOICE_SAMPLES_DIR.mkdir(exist_ok=True)
+
+def generate_filename(text: str) -> str:
+    """Generate a unique filename based on timestamp and text snippet"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Create a safe filename from first 30 chars of text
+    text_snippet = "".join(c for c in text[:30] if c.isalnum() or c in (' ', '-', '_')).strip()
+    text_snippet = text_snippet.replace(' ', '_')
+    if not text_snippet:
+        text_snippet = "audiobook"
+    return f"{timestamp}_{text_snippet}.wav"
 
 # Device selection with proper GPU support
 if torch.cuda.is_available():
@@ -55,182 +71,219 @@ elif torch.backends.mps.is_available():
     print("🚀 Using Apple Metal GPU")
 else:
     device = torch.device("cpu")
-    print("⚠️  Using CPU (slow)")
-
-OLLAMA_URL = "http://localhost:11434"
+    print("⚠️  Using CPU")
 
 class TextRequest(BaseModel):
     text: str
-    settings: dict
+    settings: dict = {}
 
-class AnnotationSettings(BaseModel):
-    addEmotions: bool = True
-    emotionIntensity: float = 0.7
-    addPauses: bool = True
-    speakerVariation: bool = True
+class TTSSettings(BaseModel):
+    voice: str = "default"
+    exaggeration: float = 0.5
+    cfg_weight: float = 0.5
+    quality: str = "high"
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize models on startup"""
-    global annotation_model, tts_model, tts_processor
+    """Initialize Chatterbox TTS model on startup"""
+    global tts_model
     
-    logger.info("Loading models...")
+    # Ensure output directories exist
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    VOICE_SAMPLES_DIR.mkdir(exist_ok=True)
+    logger.info(f"📁 Audio output directory: {OUTPUT_DIR.absolute()}")
+    logger.info(f"🎤 Voice samples directory: {VOICE_SAMPLES_DIR.absolute()}")
     
-    # Load annotation model from environment
-    annotation_model_name = os.getenv("ANNOTATION_MODEL", "")
+    logger.info("Loading Chatterbox TTS model...")
     
-    if annotation_model_name:
-        try:
-            # Test Ollama connection
-            response = requests.get(f"{OLLAMA_URL}/api/version", timeout=5)
-            if response.status_code == 200:
-                logger.info(f"✅ Ollama connected, using model: {annotation_model_name}")
-                annotation_model = annotation_model_name
-            else:
-                logger.warning("Ollama not available, using rule-based annotation")
-                annotation_model = None
-        except Exception as e:
-            logger.warning(f"Failed to connect to Ollama: {e}")
-            annotation_model = None
-    else:
-        logger.warning("No annotation model configured in .env")
-        annotation_model = None
-    
-    # Load Dia TTS model
     try:
-        # Add the dia directory to Python path (dia is in parent directory)
-        dia_path = Path.cwd().parent / "dia"
-        models_path = Path.cwd().parent / "models" / "dia-tts"
+        # Import and initialize Chatterbox TTS
+        from chatterbox.tts import ChatterboxTTS
         
-        if dia_path.exists():
-            sys.path.insert(0, str(dia_path))
-            
-            # Try to import and load Dia TTS (only if locally available)
-            try:
-                from transformers import AutoProcessor, DiaForConditionalGeneration
-                
-                # Check if model is available locally first
-                if models_path.exists():
-                    # Find the actual model path in the cache structure
-                    model_cache_path = models_path / "models--nari-labs--Dia-1.6B-0626" / "snapshots"
-                    if model_cache_path.exists():
-                        # Get the latest snapshot directory
-                        snapshot_dirs = [d for d in model_cache_path.iterdir() if d.is_dir()]
-                        if snapshot_dirs:
-                            actual_model_path = snapshot_dirs[0]  # Use the first (should be only) snapshot
-                            logger.info(f"Loading local Dia TTS model from: {actual_model_path}")
-                            
-                            # Load processor and model separately
-                            tts_processor = AutoProcessor.from_pretrained(
-                                str(actual_model_path),
-                                local_files_only=True
-                            )
-                            tts_model = DiaForConditionalGeneration.from_pretrained(
-                                str(actual_model_path),
-                                local_files_only=True
-                            )
-                            
-                            tts_model = tts_model.to(device)
-                            tts_model.eval()
-                            
-                            # Set global variables
-                            globals()['tts_processor'] = tts_processor
-                            logger.info(f"✅ Dia TTS loaded successfully on {device}")
-                            
-                else:
-                    logger.info("Dia TTS model not found in ./models/dia-tts/")
-                    logger.info("Run setup.py to download the TTS model")
-                    tts_model = None
-                
-            except Exception as e:
-                logger.error(f"Failed to setup Dia TTS: {e}")
-                logger.error("TTS service will be unavailable")
-                tts_model = None
+        logger.info("🔄 Initializing Chatterbox TTS...")
+        logger.info(f"🖥️  Target device: {device}")
+        
+        # Correct Chatterbox API usage
+        tts_model = ChatterboxTTS.from_pretrained(device=str(device))
+        
+        # Log which device the model is actually running on
+        if hasattr(tts_model, 'device'):
+            actual_device = tts_model.device
+            logger.info(f"🚀 Chatterbox TTS loaded on device: {actual_device}")
         else:
-            logger.error("Dia directory not found, run setup.py first")
-            logger.error("TTS service will be unavailable")
-            tts_model = None
-            
+            logger.info(f"📍 Chatterbox TTS initialized for device: {device}")
+        
+        # The model will be downloaded automatically on first use if not present
+        logger.info("✅ Chatterbox TTS initialized successfully!")
+        logger.info("💡 Model will download automatically on first use if needed (~2GB)")
+        
+    except ImportError as e:
+        logger.error(f"❌ Failed to import Chatterbox TTS: {e}")
+        logger.error("Please ensure chatterbox-tts is installed: pip install chatterbox-tts")
+        tts_model = None
+        
     except Exception as e:
-        logger.error(f"Failed to setup Dia TTS: {e}")
-        logger.error("TTS service will be unavailable")
+        logger.error(f"❌ Failed to initialize Chatterbox TTS: {e}")
         tts_model = None
 
 @app.get("/")
 async def root():
     return {"message": "Audiobook Studio API", "status": "running"}
 
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "models": {
-            "annotation": annotation_model is not None,
-            "annotation_model": annotation_model if annotation_model else "rule-based",
-            "tts": tts_model is not None and tts_model != "placeholder",
-            "tts_model_type": "Dia-1.6B-0626" if tts_model not in [None, "placeholder"] else "placeholder"
-        },
-        "device": str(device),
-        "cuda_available": torch.cuda.is_available(),
-        "ollama_connected": annotation_model is not None
-    }
-
-@app.post("/annotate-text")
-async def annotate_text(request: TextRequest):
-    """Add emotional annotations to text using local AI model"""
+@app.get("/files")
+async def list_generated_files():
+    """List all generated audio files"""
     try:
-        text = request.text
-        settings = request.settings
+        files = []
+        if OUTPUT_DIR.exists():
+            for file_path in OUTPUT_DIR.glob("*.wav"):
+                stat = file_path.stat()
+                files.append({
+                    "filename": file_path.name,
+                    "size_kb": round(stat.st_size / 1024, 1),
+                    "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
         
-        if not text:
-            raise HTTPException(status_code=400, detail="Text is required")
-        
-        annotated_text = text
-        
-        if settings.get('addEmotions', True):
-            annotated_text = await add_emotional_annotations(
-                text, 
-                settings.get('emotionIntensity', 0.7)
-            )
-        
-        if settings.get('addPauses', True):
-            annotated_text = add_natural_pauses(annotated_text)
+        # Sort by creation time, newest first
+        files.sort(key=lambda x: x["created"], reverse=True)
         
         return {
-            "original": text,
-            "annotated": annotated_text,
-            "settings": settings
+            "total_files": len(files),
+            "output_directory": str(OUTPUT_DIR.absolute()),
+            "files": files
         }
-        
     except Exception as e:
-        logger.error(f"Annotation error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to annotate text: {str(e)}")
+        logger.error(f"Error listing files: {e}")
+        return {"error": str(e)}
 
-@app.post("/generate-audio")
-async def generate_audio(request: TextRequest):
-    """Generate audio from text using TTS"""
+@app.get("/voices")
+async def list_available_voices():
+    """List available voice samples and their status"""
     try:
-        text = request.text
-        settings = request.settings
+        voices = [
+            {
+                "id": "default",
+                "name": "Default Voice",
+                "description": "Built-in Chatterbox voice",
+                "available": True,
+                "type": "built-in"
+            }
+        ]
         
-        if not text:
-            raise HTTPException(status_code=400, detail="Text is required")
+        # Check for voice samples
+        female_sample = VOICE_SAMPLES_DIR / "female_sample.wav"
+        male_sample = VOICE_SAMPLES_DIR / "male_sample.wav"
         
-        # First annotate the text if needed
-        if settings.get('addEmotions', True) or settings.get('addPauses', True):
-            annotation_response = await annotate_text(request)
-            processed_text = annotation_response["annotated"]
-        else:
-            processed_text = text
+        voices.append({
+            "id": "female_sample",
+            "name": "Female Voice Clone",
+            "description": "Female voice sample",
+            "available": female_sample.exists(),
+            "type": "sample",
+            "path": str(female_sample) if female_sample.exists() else None
+        })
         
-        # Generate audio
-        audio_bytes = await generate_tts_audio(processed_text, settings)
+        voices.append({
+            "id": "male_sample", 
+            "name": "Male Voice Clone",
+            "description": "Male voice sample",
+            "available": male_sample.exists(),
+            "type": "sample",
+            "path": str(male_sample) if male_sample.exists() else None
+        })
+        
+        # Scan for custom uploaded voices
+        for voice_file in VOICE_SAMPLES_DIR.glob("custom_*"):
+            if voice_file.is_file() and voice_file.suffix.lower() in ['.wav', '.mp3', '.ogg', '.flac']:
+                voice_id = voice_file.stem  # filename without extension
+                voices.append({
+                    "id": voice_id,
+                    "name": f"Custom Voice ({voice_id})",
+                    "description": f"Uploaded custom voice sample",
+                    "available": True,
+                    "type": "custom",
+                    "path": str(voice_file),
+                    "uploaded": True
+                })
+        
+        return {
+            "voices": voices,
+            "voice_samples_directory": str(VOICE_SAMPLES_DIR.absolute()),
+            "instructions": "To add voice samples, place 3-10 second audio files in the voice_samples directory or use the upload endpoint"
+        }
+    except Exception as e:
+        logger.error(f"Error listing voices: {e}")
+        return {"error": str(e)}
+
+@app.get("/files/{filename}")
+async def download_file(filename: str):
+    """Download a specific generated audio file"""
+    try:
+        file_path = OUTPUT_DIR / filename
+        
+        if not file_path.exists() or not file_path.suffix == '.wav':
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Read file and return as response
+        with open(file_path, 'rb') as f:
+            audio_bytes = f.read()
         
         return Response(
             content=audio_bytes,
             media_type="audio/wav",
             headers={
-                "Content-Disposition": "attachment; filename=audiobook.wav"
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error downloading file {filename}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint with device information"""
+    device_info = {
+        "current_device": str(device),
+        "cuda_available": torch.cuda.is_available(),
+        "mps_available": torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False
+    }
+    
+    # Add model device info if available
+    if tts_model and hasattr(tts_model, 'device'):
+        device_info["model_device"] = str(tts_model.device)
+    
+    logger.info(f"🔍 Health check - Device info: {device_info}")
+    
+    return {
+        "status": "healthy",
+        "models": {
+            "tts": tts_model is not None,
+            "tts_model_type": "Chatterbox TTS" if tts_model is not None else "none"
+        },
+        "device_info": device_info
+    }
+
+@app.post("/generate-audio")
+async def generate_audio(request: TextRequest):
+    """Generate audio from text using Chatterbox TTS"""
+    try:
+        text = request.text
+        settings = request.settings
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        
+        # Generate audio directly - no preprocessing needed with Chatterbox!
+        audio_bytes, filename, file_info = await generate_tts_audio(text, settings)
+        
+        return Response(
+            content=audio_bytes,
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "X-Generated-File": file_info["path"],
+                "X-File-Size": str(file_info["size"])
             }
         )
         
@@ -238,235 +291,179 @@ async def generate_audio(request: TextRequest):
         logger.error(f"Audio generation error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate audio: {str(e)}")
 
-async def add_emotional_annotations(text: str, intensity: float) -> str:
-    """Add emotional annotations using Ollama model"""
-    try:
-        if annotation_model is None:
-            logger.warning("Annotation model not available, using rule-based approach")
-            return add_rule_based_annotations(text, intensity)
-        
-        intensity_level = "subtle" if intensity < 0.3 else "moderate" if intensity < 0.7 else "expressive"
-        
-        prompt = f"""You are an audiobook narrator editor. Add ONLY emotional cues in parentheses to the following text. Do NOT change, rephrase, or add any other words. Only insert emotion annotations like (laughs), (sighs), (whispers), (pauses), (excited), (sad) where appropriate.
-
-Original text: "{text}"
-
-Return ONLY the original text with added emotion annotations in parentheses:"""
-        
-        # Call Ollama API
-        response = requests.post(f"{OLLAMA_URL}/api/generate", json={
-            "model": annotation_model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.3,
-                "num_predict": min(len(text) + 50, 150),  # Limit output length
-                "stop": ["\n", "Text:", "Original:", "Note:"]  # Stop tokens
-            }
-        }, timeout=30)
-        
-        if response.status_code == 200:
-            result = response.json()
-            enhanced_text = result.get("response", "").strip()
-            
-            # Clean up common AI response artifacts
-            enhanced_text = enhanced_text.replace('"', '').strip()
-            if enhanced_text.startswith(text):
-                enhanced_text = enhanced_text[len(text):].strip()
-                if enhanced_text:
-                    return text + " " + enhanced_text
-            
-            # Validate that the response contains the original text
-            if text.lower() in enhanced_text.lower() and len(enhanced_text) <= len(text) * 1.5:
-                return enhanced_text
-        
-        # Fallback to rule-based if AI response is poor
-        return add_rule_based_annotations(text, intensity)
-        
-    except Exception as e:
-        logger.warning(f"Ollama annotation failed: {e}, using rule-based approach")
-        return add_rule_based_annotations(text, intensity)
-
-def add_rule_based_annotations(text: str, intensity: float) -> str:
-    """Fallback rule-based annotation system"""
-    import re
-    
-    annotated = text
-    
-    # Simple rules based on intensity
-    if intensity > 0.3:
-        # Add basic emotions
-        annotated = re.sub(r'\b(ha ha|haha|funny|joke)\b', r'\1 (laughs)', annotated, flags=re.IGNORECASE)
-        annotated = re.sub(r'\b(oh dear|oh no|unfortunately)\b', r'\1 (sighs)', annotated, flags=re.IGNORECASE)
-        annotated = re.sub(r'\b(wow|amazing|incredible)\b', r'\1 (gasps)', annotated, flags=re.IGNORECASE)
-        annotated = re.sub(r'\b(whisper|quietly|softly)\b', r'\1 (whispers)', annotated, flags=re.IGNORECASE)
-    
-    if intensity > 0.7:
-        # Add more dramatic emotions
-        annotated = re.sub(r'([.!?])\s+', r'\1 (pauses) ', annotated)
-        annotated = re.sub(r'([,;:])\s+', r'\1 (brief pause) ', annotated)
-    
-    return annotated
-
-def add_natural_pauses(text: str) -> str:
-    """Add natural pauses at punctuation"""
-    import re
-    text = re.sub(r'([.!?])\s+', r'\1 (pauses) ', text)
-    text = re.sub(r'([,;:])\s+', r'\1 (brief pause) ', text)
-    return text
-
-async def generate_tts_audio(text: str, settings: dict) -> bytes:
-    """Generate audio using Dia TTS"""
-    global tts_model, tts_processor
+async def generate_tts_audio(text: str, settings: dict) -> tuple[bytes, str, dict]:
+    """Generate audio using Chatterbox TTS - returns audio_bytes, filename, and file_info"""
+    global tts_model
     
     if tts_model is None:
-        raise HTTPException(status_code=503, detail="TTS model not available. Please ensure Dia TTS is properly installed.")
-        
-    if tts_processor is None:
-        raise HTTPException(status_code=503, detail="TTS processor not available")
-        
+        raise HTTPException(status_code=503, detail="Chatterbox TTS model not available. Please ensure it's properly installed.")
+    
     import time
     start_time = time.time()
-    logger.info(f"🎵 Generating audio for text: {text[:50]}...")
+    logger.info(f"🎵 Generating audio with Chatterbox TTS...")
     logger.info(f"📊 Text length: {len(text)} characters")
+    logger.info(f"📝 Text: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+    logger.info(f"🖥️  Using device: {device}")
     
-    # Preprocess text for Dia TTS
-    processed_text = preprocess_text_for_dia(text)
+    # Log model device if available
+    if hasattr(tts_model, 'device'):
+        logger.info(f"🚀 Model running on: {tts_model.device}")
     
     try:
-        # Process input text
-        prep_start = time.time()
-        logger.info("🔄 Processing input text...")
-        inputs = tts_processor(text=[processed_text], padding=True, return_tensors="pt").to(device)
-        prep_time = time.time() - prep_start
-        logger.info(f"✅ Input processed in {prep_time:.2f}s")
-        
-        # Generate audio with Dia TTS
+        # Generate audio with Chatterbox - correct API usage!
+        logger.info("🔄 Generating audio...")
         gen_start = time.time()
-        logger.info("🎶 Generating audio tokens...")
         
-        # Calculate adaptive max_tokens based on text length
-        # Audio models need substantial tokens for proper speech generation
-        char_count = len(processed_text)
-        base_tokens = char_count * 25  # Increased to 25 tokens per character
-        max_tokens = max(1536, min(base_tokens, 3072))  # Min 1536 for proper speech, max 3072
+        # Chatterbox TTS correct API - returns tensor directly
+        # Parameters based on documentation: text, audio_prompt_path (optional), exaggeration, cfg_weight
         
-        logger.info(f"📊 Text: {char_count} chars → Using {max_tokens} tokens (ratio: {max_tokens/char_count:.1f}:1)")
-        logger.info(f"📝 Processed text: '{processed_text}'")
+        # Handle voice selection
+        voice_setting = settings.get('voice', 'default')
+        audio_prompt_path = None
         
-        generated_tokens = 0
+        if voice_setting == 'female_sample':
+            # Use female voice sample if available
+            female_sample_path = VOICE_SAMPLES_DIR / "female_sample.wav"
+            if female_sample_path.exists():
+                audio_prompt_path = str(female_sample_path)
+                logger.info(f"🎤 Using female voice sample: {audio_prompt_path}")
+            else:
+                logger.warning(f"🎤 Female voice sample not found at {female_sample_path}")
+        elif voice_setting == 'male_sample':
+            # Use male voice sample if available
+            male_sample_path = VOICE_SAMPLES_DIR / "male_sample.wav"
+            if male_sample_path.exists():
+                audio_prompt_path = str(male_sample_path)
+                logger.info(f"🎤 Using male voice sample: {audio_prompt_path}")
+            else:
+                logger.warning(f"🎤 Male voice sample not found at {male_sample_path}")
+        elif voice_setting.startswith('custom_'):
+            # Handle uploaded custom voices
+            # Look for the custom voice file (could be .wav, .mp3, etc.)
+            custom_files = list(VOICE_SAMPLES_DIR.glob(f"{voice_setting}.*"))
+            if custom_files:
+                audio_prompt_path = str(custom_files[0])  # Use the first matching file
+                logger.info(f"🎤 Using custom voice sample: {audio_prompt_path}")
+            else:
+                logger.warning(f"🎤 Custom voice '{voice_setting}' not found in {VOICE_SAMPLES_DIR}")
+        elif voice_setting == 'default':
+            logger.info("🎤 Using default Chatterbox voice")
+        else:
+            logger.warning(f"🎤 Unknown voice setting '{voice_setting}', using default")
         
-        # Override the model's forward pass to track progress
-        original_forward = tts_model.forward
-        
-        def forward_with_progress(*args, **kwargs):
-            nonlocal generated_tokens
-            generated_tokens += 1
-            
-            # Log progress every 50 tokens
-            if generated_tokens % 50 == 0:
-                elapsed = time.time() - gen_start
-                progress_pct = (generated_tokens / max_tokens) * 100
-                speed = generated_tokens / elapsed if elapsed > 0 else 0
-                eta = (max_tokens - generated_tokens) / speed if speed > 0 else 0
-                logger.info(f"🔄 Progress: {generated_tokens}/{max_tokens} ({progress_pct:.1f}%) | Speed: {speed:.1f} tok/s | ETA: {eta:.1f}s")
-            
-            return original_forward(*args, **kwargs)
-        
-        # Patch the forward method temporarily
-        tts_model.forward = forward_with_progress
-        
-        try:
-            with torch.no_grad():
-                outputs = tts_model.generate(
-                    **inputs,
-                    max_new_tokens=max_tokens,
-                    guidance_scale=3.0,
-                    temperature=1.8,
-                    top_p=0.90,
-                    top_k=45
-                )
-        finally:
-            # Restore original forward method
-            tts_model.forward = original_forward
+        # Generate with appropriate voice
+        if audio_prompt_path:
+            audio_tensor = tts_model.generate(
+                text,
+                audio_prompt_path=audio_prompt_path,
+                exaggeration=settings.get('exaggeration', 0.5),
+                cfg_weight=settings.get('cfg_weight', 0.5)
+            )
+        else:
+            audio_tensor = tts_model.generate(
+                text,
+                exaggeration=settings.get('exaggeration', 0.5),
+                cfg_weight=settings.get('cfg_weight', 0.5)
+            )
         
         gen_time = time.time() - gen_start
-        logger.info(f"✅ Audio tokens generated in {gen_time:.2f}s")
+        logger.info(f"✅ Audio generated in {gen_time:.2f}s")
         
-        # Decode the outputs
-        decode_start = time.time()
-        logger.info("🔊 Decoding audio...")
-        audio_outputs = tts_processor.batch_decode(outputs)
-        decode_time = time.time() - decode_start
-        logger.info(f"✅ Audio decoded in {decode_time:.2f}s")
+        # Log tensor device info
+        if hasattr(audio_tensor, 'device'):
+            logger.info(f"🎯 Generated tensor device: {audio_tensor.device}")
         
-        # Save to temporary buffer
-        save_start = time.time()
-        logger.info("💾 Saving audio file...")
+        # Convert tensor to WAV bytes for response
+        logger.info("💾 Converting audio tensor to WAV bytes...")
+        
+        # Generate unique filename
+        filename = generate_filename(text)
+        output_path = OUTPUT_DIR / filename
+        
+        # Use torchaudio to save the tensor to both file and bytes
+        import torchaudio
         import tempfile
+        import os
+        
+        # Save to the permanent output directory
+        logger.info(f"📁 Saving audio to: {output_path}")
+        torchaudio.save(str(output_path), audio_tensor.cpu(), tts_model.sr)
+        
+        # Also create bytes for HTTP response using temp file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            tts_processor.save_audio(audio_outputs, temp_file.name)
+            # Save tensor to temporary WAV file
+            torchaudio.save(temp_file.name, audio_tensor.cpu(), tts_model.sr)
             
-            # Read the audio file
-            with open(temp_file.name, 'rb') as audio_file:
-                audio_bytes = audio_file.read()
+            # Read the WAV file as bytes
+            with open(temp_file.name, 'rb') as f:
+                audio_bytes = f.read()
             
             # Clean up temp file
-            import os
             os.unlink(temp_file.name)
         
-        save_time = time.time() - save_start
         total_time = time.time() - start_time
         
-        logger.info(f"✅ Audio saved in {save_time:.2f}s")
+        # Get file size for logging
+        file_size = output_path.stat().st_size if output_path.exists() else 0
+        
+        logger.info(f"✅ Audio saved to: {output_path}")
+        logger.info(f"📊 File size: {file_size / 1024:.1f} KB")
         logger.info(f"🎉 Total generation time: {total_time:.2f}s")
         logger.info(f"⚡ Speed: {len(text)/total_time:.1f} chars/sec")
-        return audio_bytes
+        
+        file_info = {
+            "path": str(output_path),
+            "size": file_size
+        }
+        
+        return audio_bytes, filename, file_info
         
     except Exception as e:
-        logger.error(f"TTS generation failed: {e}")
+        logger.error(f"Chatterbox TTS generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate audio: {str(e)}")
 
-def preprocess_text_for_dia(text: str) -> str:
-    """Preprocess text for optimal Dia TTS generation based on working pattern"""
-    
-    # Clean up formatting first
-    text = text.replace('\n\n', ' ').replace('\n', ' ').strip()
-    
-    # If text is very short, pad it with conversational context
-    if len(text) < 20:
-        # Create a conversation pattern like the working example
-        return f"[S2] Here is what you wanted to hear. [S1] {text}. Amazing! [S2] That was perfect."
-    
-    # For longer text, create natural speaker alternation
-    sentences = [s.strip() for s in text.replace('.', '.|').replace('!', '!|').replace('?', '?|').split('|') if s.strip()]
-    
-    if len(sentences) == 1:
-        # Single sentence - wrap in conversation like working example
-        return f"[S2] Let me read this for you. [S1] {sentences[0]}. That's great! [S2] Hope you enjoyed that."
-    
-    # Multiple sentences - alternate speakers naturally
-    result = "[S2] "
-    current_speaker = "S2"
-    
-    for i, sentence in enumerate(sentences):
-        if i > 0:
-            # Switch speaker every 1-2 sentences
-            if i % 2 == 1:
-                current_speaker = "S1" if current_speaker == "S2" else "S2"
-                result += f" [{current_speaker}] "
+@app.post("/upload_voice")
+async def upload_voice(voice_file: UploadFile = File(...)):
+    """Upload a custom voice sample for voice cloning"""
+    try:
+        # Validate file type
+        if not voice_file.content_type.startswith('audio/'):
+            raise HTTPException(status_code=400, detail="File must be an audio file")
         
-        result += sentence
+        # Validate file size (max 10MB)
+        if voice_file.size > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
         
-        # Add occasional emotional cues like in working example
-        if i == len(sentences) // 2:
-            result += ". Amazing!"
-    
-    # Ensure it ends with speaker alternation like working example
-    final_speaker = "S1" if current_speaker == "S2" else "S2"
-    result += f" [{final_speaker}] That was excellent."
-    
-    return result
+        # Create a unique filename for the uploaded voice
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_extension = os.path.splitext(voice_file.filename)[1] or '.wav'
+        voice_id = f"custom_{timestamp}"
+        filename = f"{voice_id}{file_extension}"
+        
+        # Save the uploaded file
+        voice_path = VOICE_SAMPLES_DIR / filename
+        
+        logger.info(f"📤 Uploading voice sample: {voice_file.filename}")
+        logger.info(f"💾 Saving to: {voice_path}")
+        
+        # Write the uploaded file
+        with open(voice_path, "wb") as f:
+            content = await voice_file.read()
+            f.write(content)
+        
+        logger.info(f"✅ Voice sample uploaded successfully: {voice_id}")
+        
+        return {
+            "message": "Voice sample uploaded successfully",
+            "voice_id": voice_id,
+            "filename": filename,
+            "path": str(voice_path),
+            "size": len(content)
+        }
+        
+    except Exception as e:
+        logger.error(f"Voice upload error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload voice sample: {str(e)}")
 
 # Endpoint handlers
 

@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000'
 
-interface AnnotationSettings {
-  addEmotions: boolean
-  emotionIntensity: number
-  addPauses: boolean
-  speakerVariation: boolean
+interface TTSSettings {
+  voice: string
+  exaggeration: number
+  cfg_weight: number
+  quality: string
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, settings }: { text: string; settings: AnnotationSettings } = await request.json()
+    const { text, settings }: { text: string; settings: TTSSettings } = await request.json()
 
     if (!text) {
       return NextResponse.json({ error: 'Text is required' }, { status: 400 })

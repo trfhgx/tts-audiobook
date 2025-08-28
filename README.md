@@ -1,78 +1,178 @@
 # Audiobook Studio
 
-A fun web application for creating audiobooks using AI-powered text-to-speech with Dia TTS and emotional annotations.
+A professional web application for text-to-speech conversion using Chatterbox TTS with advanced voice cloning capabilities.
 
 ## Features
 
-- 🎭 **Smart AI Annotations** - Local models add emotions like (laughs), (sighs), (whispers)
-- 🎵 **High-Quality TTS** - Dia TTS model for natural speech generation
-- 🎛️ **Customizable Settings** - Control emotion intensity and pauses
-- 📁 **File Upload Support** - Import text files directly
-- 🎧 **Built-in Player** - Preview and download your audiobooks
-- 🔒 **Fully Local** - No data sent to external services
+- **Advanced Voice Cloning** - Upload custom voice samples for personalized speech synthesis
+- **High-Quality TTS** - Chatterbox TTS model for natural speech generation
+- **Customizable Settings** - Control exaggeration levels and CFG weight for optimal output
+- **File Management** - Automatic saving of generated audio with timestamp organization
+- **Real-time Monitoring** - Device detection and performance logging (GPU/CPU)
+- **Voice Library** - Built-in male/female voice samples plus custom upload support
+- **Professional Audio** - WAV format output with configurable quality settings
 
-## Quick Setup
+## Installation
 
-1. **Prerequisites**
-   - Node.js 18+
-   - Python 3.8+
-   - Ollama (for text annotation models)
+### Prerequisites
 
-2. **Interactive Setup**
+- Python 3.8 or higher
+- Node.js 18 or higher
+- GPU support recommended (CUDA or Apple Metal)
+
+### Backend Setup
+
+1. Clone the repository and navigate to the project directory:
    ```bash
-   git clone <your-repo-url>
+   git clone <repository-url>
    cd audiobook-studio
-   python3 setup.py
    ```
-   
-   The setup will guide you through:
-   - Creating virtual environment
-   - Selecting annotation models (Ollama)
-   - Downloading Dia TTS model (~6GB)
-   - Installing all dependencies
 
-3. **Start the Application**
-   
-   **Terminal 1 (Backend):**
+2. Create and activate a Python virtual environment:
    ```bash
-   cd backend
-   source venv/bin/activate
-   python backend.py
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
-   
-   **Terminal 2 (Frontend):**
+
+3. Install Python dependencies:
    ```bash
-   npm run dev
+   pip install -r requirements.txt
    ```
-   
-   Open http://localhost:3000
 
-## Text Formatting Tips
+4. Install Chatterbox TTS:
+   ```bash
+   pip install torch torchaudio
+   pip install git+https://github.com/chatterbox-tts/chatterbox
+   ```
 
-- Use `[S1]` and `[S2]` for different speakers
-- Add emotions manually: `(laughs)`, `(sighs)`, `(whispers)`, `(pauses)`
-- Or let AI add them automatically with configurable intensity
-- Keep individual sections under 500 characters for best results
+### Frontend Setup
+
+1. Install Node.js dependencies:
+   ```bash
+   npm install
+   ```
+
+2. Build the frontend:
+   ```bash
+   npm run build
+   ```
+
+## Running the Application
+
+### Start Backend Server
+
+```bash
+cd backend
+python backend.py
+```
+
+The backend will start on `http://localhost:8000`
+
+### Start Frontend
+
+```bash
+npm run dev
+```
+
+The frontend will be available at `http://localhost:3000`
+
+## API Endpoints
+
+### Text-to-Speech Generation
+- `POST /generate-audio` - Convert text to speech with voice settings
+- `GET /health` - Check system status and device information
+
+### Voice Management
+- `GET /voices` - List available voice samples
+- `POST /upload_voice` - Upload custom voice samples for cloning
+
+### File Operations
+- `GET /files` - List generated audio files
+- `GET /files/{filename}` - Download specific audio file
+
+## Voice Cloning
+
+### Adding Voice Samples
+
+1. **Manual Upload**: Place audio files in the `voice_samples/` directory:
+   - `female_sample.wav` - Female voice option
+   - `male_sample.wav` - Male voice option
+
+2. **Web Upload**: Use the frontend interface to upload custom voice samples
+
+### Voice Sample Requirements
+
+- **Duration**: 5-10 seconds of clear speech
+- **Format**: WAV, MP3, or other common audio formats
+- **Quality**: Clean recording without background noise
+- **Content**: Natural conversational speech
 
 ## Configuration
 
+### TTS Parameters
 
+- **Exaggeration**: Controls speech expressiveness (0.0-1.0)
+- **CFG Weight**: Balances generation speed and quality (0.1-1.0)
+- **Voice**: Select from default, samples, or uploaded custom voices
 
-You can change the annotation model to any Ollama model you have installed.
+### System Settings
 
-## Architecture
+The application automatically detects and uses available hardware:
+- CUDA GPU (NVIDIA)
+- Apple Metal (M1/M2 Macs)
+- CPU fallback
 
-- **Frontend:** Next.js 14 + TypeScript + Tailwind CSS
-- **Backend:** FastAPI + PyTorch + Transformers
-- **TTS:** Dia TTS (nari-labs/Dia-1.6B-0626)
-- **Annotation:** Local Ollama models (no external API calls)
+## File Management
+
+Generated audio files are automatically saved to `generated_audio/` with timestamps:
+- Format: `YYYYMMDD_HHMMSS_text_snippet.wav`
+- Automatic directory creation
+- File size and generation time logging
+
+## Development
+
+### Project Structure
+
+```
+audiobook-studio/
+├── backend/
+│   └── backend.py          # FastAPI server
+├── components/
+│   └── TTSSettings.tsx     # Voice configuration UI
+├── voice_samples/          # Voice cloning samples
+├── generated_audio/        # Output audio files
+└── requirements.txt        # Python dependencies
+```
+
+### Technology Stack
+
+- **Backend**: FastAPI, PyTorch, Chatterbox TTS
+- **Frontend**: Next.js, TypeScript, Tailwind CSS
+- **Audio Processing**: torchaudio, librosa
+- **Voice Cloning**: Chatterbox neural voice synthesis
 
 ## Troubleshooting
 
-- **"TTS model not available"** - Run setup.py and download the Dia TTS model
-- **"No annotation model"** - Install Ollama and run setup.py to select a model
-- **Backend won't start** - Ensure virtual environment exists: `python3 setup.py`
+### Common Issues
+
+1. **Model Loading Errors**
+   - Ensure Chatterbox TTS is properly installed
+   - Check CUDA/Metal availability for GPU acceleration
+
+2. **Voice Upload Failures**
+   - Verify audio file format and size (max 10MB)
+   - Check file permissions in voice_samples directory
+
+3. **Generation Timeouts**
+   - Reduce text length for faster processing
+   - Lower CFG weight for speed optimization
+
+### Performance Optimization
+
+- Use GPU acceleration when available
+- Optimize voice sample quality for better cloning results
+- Adjust exaggeration and CFG weight based on use case
 
 ## License
 
-MIT License. Dia TTS is licensed under Apache 2.0.
+MIT License
