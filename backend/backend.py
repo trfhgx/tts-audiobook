@@ -345,8 +345,15 @@ async def generate_tts_audio(text: str, settings: dict) -> bytes:
         gen_start = time.time()
         logger.info("🎶 Generating audio tokens...")
         
-        # Custom generation with progress tracking
-        max_tokens = 3072
+        # Calculate adaptive max_tokens based on text length
+        # Audio models need substantial tokens for proper speech generation
+        char_count = len(processed_text)
+        base_tokens = char_count * 25  # Increased to 25 tokens per character
+        max_tokens = max(1536, min(base_tokens, 3072))  # Min 1536 for proper speech, max 3072
+        
+        logger.info(f"📊 Text: {char_count} chars → Using {max_tokens} tokens (ratio: {max_tokens/char_count:.1f}:1)")
+        logger.info(f"📝 Processed text: '{processed_text}'")
+        
         generated_tokens = 0
         
         # Override the model's forward pass to track progress
@@ -421,23 +428,45 @@ async def generate_tts_audio(text: str, settings: dict) -> bytes:
         raise HTTPException(status_code=500, detail=f"Failed to generate audio: {str(e)}")
 
 def preprocess_text_for_dia(text: str) -> str:
-    """Preprocess text for optimal Dia TTS generation"""
+    """Preprocess text for optimal Dia TTS generation based on working pattern"""
     
-    # Ensure proper speaker tags
-    if not text.strip().startswith('[S1]') and not text.strip().startswith('[S2]'):
-        text = f"[S1] {text}"
+    # Clean up formatting first
+    text = text.replace('\n\n', ' ').replace('\n', ' ').strip()
     
-    # Clean up formatting
-    text = text.replace('\n\n', ' ')
-    text = text.replace('\n', ' ')
+    # If text is very short, pad it with conversational context
+    if len(text) < 20:
+        # Create a conversation pattern like the working example
+        return f"[S2] Here is what you wanted to hear. [S1] {text}. Amazing! [S2] That was perfect."
     
-    # Ensure text ends with a speaker tag for better quality
-    if not text.strip().endswith('[S1]') and not text.strip().endswith('[S2]'):
-        # Determine the last speaker and add it
-        last_speaker = '[S2]' if '[S2]' in text else '[S1]'
-        text = f"{text} {last_speaker}"
+    # For longer text, create natural speaker alternation
+    sentences = [s.strip() for s in text.replace('.', '.|').replace('!', '!|').replace('?', '?|').split('|') if s.strip()]
     
-    return text
+    if len(sentences) == 1:
+        # Single sentence - wrap in conversation like working example
+        return f"[S2] Let me read this for you. [S1] {sentences[0]}. That's great! [S2] Hope you enjoyed that."
+    
+    # Multiple sentences - alternate speakers naturally
+    result = "[S2] "
+    current_speaker = "S2"
+    
+    for i, sentence in enumerate(sentences):
+        if i > 0:
+            # Switch speaker every 1-2 sentences
+            if i % 2 == 1:
+                current_speaker = "S1" if current_speaker == "S2" else "S2"
+                result += f" [{current_speaker}] "
+        
+        result += sentence
+        
+        # Add occasional emotional cues like in working example
+        if i == len(sentences) // 2:
+            result += ". Amazing!"
+    
+    # Ensure it ends with speaker alternation like working example
+    final_speaker = "S1" if current_speaker == "S2" else "S2"
+    result += f" [{final_speaker}] That was excellent."
+    
+    return result
 
 # Endpoint handlers
 
