@@ -1,71 +1,77 @@
 # Audiobook Studio
 
-A web application for creating audiobooks using AI-powered text-to-speech with Dia TTS and emotional annotations.
+A fun web application for creating audiobooks using AI-powered text-to-speech with Dia TTS and emotional annotations.
 
 ## Features
 
-- Smart text input with file upload support
-- AI-powered emotion annotations using local models
-- High-quality text-to-speech with Dia TTS
-- Customizable audio settings
-- Built-in audio player with controls
-- Download audiobooks as WAV files
+- 🎭 **Smart AI Annotations** - Local models add emotions like (laughs), (sighs), (whispers)
+- 🎵 **High-Quality TTS** - Dia TTS model for natural speech generation
+- 🎛️ **Customizable Settings** - Control emotion intensity and pauses
+- 📁 **File Upload Support** - Import text files directly
+- 🎧 **Built-in Player** - Preview and download your audiobooks
+- 🔒 **Fully Local** - No data sent to external services
 
-## Quick Start
+## Quick Setup
 
 1. **Prerequisites**
    - Node.js 18+
    - Python 3.8+
    - Ollama (for text annotation models)
 
-2. **Setup**
+2. **Interactive Setup**
    ```bash
-   git clone <your-repo>
+   git clone <your-repo-url>
    cd audiobook-studio
    python3 setup.py
    ```
-
-3. **Run**
-   ```bash
-   python3 run.py
-   ```
-   Then open http://localhost:3000
-
-## Manual Setup
-
-If you prefer to run components separately:
-
-1. Install dependencies:
-   ```bash
-   npm install
-   pip install -r requirements.txt
-   ```
-
-2. Install Ollama and a small model:
-   ```bash
-   ollama pull llama3.2:1b
-   ```
-
-3. Update .env.local:
-   ```
-   ANNOTATION_MODEL=llama3.2:1b
-   PYTHON_BACKEND_URL=http://localhost:8000
-   ```
-
-4. Run backend and frontend:
-   ```bash
-   # Terminal 1
-   python3 backend.py
    
-   # Terminal 2
+   The setup will guide you through:
+   - Creating virtual environment
+   - Selecting annotation models (Ollama)
+   - Downloading Dia TTS model (~6GB)
+   - Installing all dependencies
+
+3. **Start the Application**
+   
+   **Terminal 1 (Backend):**
+   ```bash
+   cd backend
+   source venv/bin/activate
+   python backend.py
+   ```
+   
+   **Terminal 2 (Frontend):**
+   ```bash
    npm run dev
    ```
+   
+   Open http://localhost:3000
 
-## Text Formatting
+## Text Formatting Tips
 
 - Use `[S1]` and `[S2]` for different speakers
-- Add emotions like `(laughs)`, `(sighs)`, `(whispers)` manually or let AI add them
-- Keep sections under 20 seconds for best results
+- Add emotions manually: `(laughs)`, `(sighs)`, `(whispers)`, `(pauses)`
+- Or let AI add them automatically with configurable intensity
+- Keep individual sections under 500 characters for best results
+
+## Configuration
+
+
+
+You can change the annotation model to any Ollama model you have installed.
+
+## Architecture
+
+- **Frontend:** Next.js 14 + TypeScript + Tailwind CSS
+- **Backend:** FastAPI + PyTorch + Transformers
+- **TTS:** Dia TTS (nari-labs/Dia-1.6B-0626)
+- **Annotation:** Local Ollama models (no external API calls)
+
+## Troubleshooting
+
+- **"TTS model not available"** - Run setup.py and download the Dia TTS model
+- **"No annotation model"** - Install Ollama and run setup.py to select a model
+- **Backend won't start** - Ensure virtual environment exists: `python3 setup.py`
 
 ## License
 

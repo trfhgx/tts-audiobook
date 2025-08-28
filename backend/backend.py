@@ -20,6 +20,12 @@ import os
 import sys
 from pathlib import Path
 
+# Load environment variables from parent directory
+env_file = Path(__file__).parent.parent / ".env.local"
+if env_file.exists():
+    from dotenv import load_dotenv
+    load_dotenv(env_file)
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,7 +44,19 @@ app.add_middleware(
 # Global variables
 annotation_model = None
 tts_model = None
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+tts_processor = None
+
+# Device selection with proper GPU support
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    print("🚀 Using CUDA GPU")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps") 
+    print("🚀 Using Apple Metal GPU")
+else:
+    device = torch.device("cpu")
+    print("⚠️  Using CPU (slow)")
+
 OLLAMA_URL = "http://localhost:11434"
 
 class TextRequest(BaseModel):
@@ -54,7 +72,7 @@ class AnnotationSettings(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize models on startup"""
-    global annotation_model, tts_model
+    global annotation_model, tts_model, tts_processor
     
     logger.info("Loading models...")
     
@@ -80,29 +98,52 @@ async def startup_event():
     
     # Load Dia TTS model
     try:
-        # Add the dia directory to Python path
-        dia_path = Path.cwd() / "dia"
+        # Add the dia directory to Python path (dia is in parent directory)
+        dia_path = Path.cwd().parent / "dia"
+        models_path = Path.cwd().parent / "models" / "dia-tts"
+        
         if dia_path.exists():
             sys.path.insert(0, str(dia_path))
             
-            # Try to import and load Dia TTS
+            # Try to import and load Dia TTS (only if locally available)
             try:
-                from transformers import AutoModel, AutoTokenizer
+                from transformers import AutoProcessor, DiaForConditionalGeneration
                 
-                model_name = "nari-labs/Dia-1.6B-0626"
-                logger.info(f"Loading Dia TTS model: {model_name}")
-                
-                tts_model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
-                tts_tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-                
-                tts_model = tts_model.to(device)
-                tts_model.eval()
-                
-                globals()['tts_tokenizer'] = tts_tokenizer
-                logger.info(f"✅ Dia TTS loaded successfully on {device}")
+                # Check if model is available locally first
+                if models_path.exists():
+                    # Find the actual model path in the cache structure
+                    model_cache_path = models_path / "models--nari-labs--Dia-1.6B-0626" / "snapshots"
+                    if model_cache_path.exists():
+                        # Get the latest snapshot directory
+                        snapshot_dirs = [d for d in model_cache_path.iterdir() if d.is_dir()]
+                        if snapshot_dirs:
+                            actual_model_path = snapshot_dirs[0]  # Use the first (should be only) snapshot
+                            logger.info(f"Loading local Dia TTS model from: {actual_model_path}")
+                            
+                            # Load processor and model separately
+                            tts_processor = AutoProcessor.from_pretrained(
+                                str(actual_model_path),
+                                local_files_only=True
+                            )
+                            tts_model = DiaForConditionalGeneration.from_pretrained(
+                                str(actual_model_path),
+                                local_files_only=True
+                            )
+                            
+                            tts_model = tts_model.to(device)
+                            tts_model.eval()
+                            
+                            # Set global variables
+                            globals()['tts_processor'] = tts_processor
+                            logger.info(f"✅ Dia TTS loaded successfully on {device}")
+                            
+                else:
+                    logger.info("Dia TTS model not found in ./models/dia-tts/")
+                    logger.info("Run setup.py to download the TTS model")
+                    tts_model = None
                 
             except Exception as e:
-                logger.error(f"Failed to load Dia TTS from HuggingFace: {e}")
+                logger.error(f"Failed to setup Dia TTS: {e}")
                 logger.error("TTS service will be unavailable")
                 tts_model = None
         else:
@@ -206,13 +247,11 @@ async def add_emotional_annotations(text: str, intensity: float) -> str:
         
         intensity_level = "subtle" if intensity < 0.3 else "moderate" if intensity < 0.7 else "expressive"
         
-        prompt = f"""Add emotional cues to this text for audiobook narration. Use {intensity_level} emotions.
-Add annotations like (laughs), (sighs), (whispers), (pauses) where appropriate.
-Keep the original text intact, only ADD emotions in parentheses.
+        prompt = f"""You are an audiobook narrator editor. Add ONLY emotional cues in parentheses to the following text. Do NOT change, rephrase, or add any other words. Only insert emotion annotations like (laughs), (sighs), (whispers), (pauses), (excited), (sad) where appropriate.
 
-Text: {text}
+Original text: "{text}"
 
-Enhanced text:"""
+Return ONLY the original text with added emotion annotations in parentheses:"""
         
         # Call Ollama API
         response = requests.post(f"{OLLAMA_URL}/api/generate", json={
@@ -220,8 +259,9 @@ Enhanced text:"""
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.7,
-                "num_predict": 200
+                "temperature": 0.3,
+                "num_predict": min(len(text) + 50, 150),  # Limit output length
+                "stop": ["\n", "Text:", "Original:", "Note:"]  # Stop tokens
             }
         }, timeout=30)
         
@@ -229,12 +269,15 @@ Enhanced text:"""
             result = response.json()
             enhanced_text = result.get("response", "").strip()
             
-            # Clean up the response to extract just the enhanced text
-            if "Enhanced text:" in enhanced_text:
-                enhanced_text = enhanced_text.split("Enhanced text:")[-1].strip()
+            # Clean up common AI response artifacts
+            enhanced_text = enhanced_text.replace('"', '').strip()
+            if enhanced_text.startswith(text):
+                enhanced_text = enhanced_text[len(text):].strip()
+                if enhanced_text:
+                    return text + " " + enhanced_text
             
-            # Validate the result
-            if enhanced_text and len(enhanced_text) >= len(text) * 0.8:
+            # Validate that the response contains the original text
+            if text.lower() in enhanced_text.lower() and len(enhanced_text) <= len(text) * 1.5:
                 return enhanced_text
         
         # Fallback to rule-based if AI response is poor
@@ -274,55 +317,104 @@ def add_natural_pauses(text: str) -> str:
 
 async def generate_tts_audio(text: str, settings: dict) -> bytes:
     """Generate audio using Dia TTS"""
+    global tts_model, tts_processor
+    
     if tts_model is None:
         raise HTTPException(status_code=503, detail="TTS model not available. Please ensure Dia TTS is properly installed.")
         
-    logger.info(f"Generating audio for text: {text[:50]}...")
+    if tts_processor is None:
+        raise HTTPException(status_code=503, detail="TTS processor not available")
+        
+    import time
+    start_time = time.time()
+    logger.info(f"🎵 Generating audio for text: {text[:50]}...")
+    logger.info(f"📊 Text length: {len(text)} characters")
     
     # Preprocess text for Dia TTS
     processed_text = preprocess_text_for_dia(text)
     
-    # Get tokenizer from globals
-    tokenizer = globals().get('tts_tokenizer')
-    if tokenizer is None:
-        raise HTTPException(status_code=503, detail="TTS tokenizer not available")
-    
     try:
-        # Tokenize input
-        inputs = tokenizer(processed_text, return_tensors="pt", padding=True)
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        # Process input text
+        prep_start = time.time()
+        logger.info("🔄 Processing input text...")
+        inputs = tts_processor(text=[processed_text], padding=True, return_tensors="pt").to(device)
+        prep_time = time.time() - prep_start
+        logger.info(f"✅ Input processed in {prep_time:.2f}s")
         
         # Generate audio with Dia TTS
-        with torch.no_grad():
-            audio_tokens = tts_model.generate(
-                **inputs,
-                max_length=min(2048, len(inputs['input_ids'][0]) + 1024),
-                do_sample=True,
-                temperature=0.7,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id
-            )
+        gen_start = time.time()
+        logger.info("🎶 Generating audio tokens...")
         
-        # Decode audio tokens to waveform
-        if hasattr(tts_model, 'decode_audio'):
-            audio_waveform = tts_model.decode_audio(audio_tokens)
-        elif hasattr(tts_model, 'decode'):
-            audio_waveform = tts_model.decode(audio_tokens)
-        else:
-            raise HTTPException(status_code=503, detail="Dia TTS model does not support audio decoding")
+        # Custom generation with progress tracking
+        max_tokens = 3072
+        generated_tokens = 0
         
-        # Ensure audio is in the right format
-        if audio_waveform.dim() == 1:
-            audio_waveform = audio_waveform.unsqueeze(0)
+        # Override the model's forward pass to track progress
+        original_forward = tts_model.forward
         
-        # Convert to WAV bytes
-        sample_rate = 24000
-        buffer = io.BytesIO()
-        torchaudio.save(buffer, audio_waveform.cpu(), sample_rate, format="wav")
-        buffer.seek(0)
+        def forward_with_progress(*args, **kwargs):
+            nonlocal generated_tokens
+            generated_tokens += 1
+            
+            # Log progress every 50 tokens
+            if generated_tokens % 50 == 0:
+                elapsed = time.time() - gen_start
+                progress_pct = (generated_tokens / max_tokens) * 100
+                speed = generated_tokens / elapsed if elapsed > 0 else 0
+                eta = (max_tokens - generated_tokens) / speed if speed > 0 else 0
+                logger.info(f"🔄 Progress: {generated_tokens}/{max_tokens} ({progress_pct:.1f}%) | Speed: {speed:.1f} tok/s | ETA: {eta:.1f}s")
+            
+            return original_forward(*args, **kwargs)
         
-        logger.info("✅ Audio generated successfully")
-        return buffer.getvalue()
+        # Patch the forward method temporarily
+        tts_model.forward = forward_with_progress
+        
+        try:
+            with torch.no_grad():
+                outputs = tts_model.generate(
+                    **inputs,
+                    max_new_tokens=max_tokens,
+                    guidance_scale=3.0,
+                    temperature=1.8,
+                    top_p=0.90,
+                    top_k=45
+                )
+        finally:
+            # Restore original forward method
+            tts_model.forward = original_forward
+        
+        gen_time = time.time() - gen_start
+        logger.info(f"✅ Audio tokens generated in {gen_time:.2f}s")
+        
+        # Decode the outputs
+        decode_start = time.time()
+        logger.info("🔊 Decoding audio...")
+        audio_outputs = tts_processor.batch_decode(outputs)
+        decode_time = time.time() - decode_start
+        logger.info(f"✅ Audio decoded in {decode_time:.2f}s")
+        
+        # Save to temporary buffer
+        save_start = time.time()
+        logger.info("💾 Saving audio file...")
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            tts_processor.save_audio(audio_outputs, temp_file.name)
+            
+            # Read the audio file
+            with open(temp_file.name, 'rb') as audio_file:
+                audio_bytes = audio_file.read()
+            
+            # Clean up temp file
+            import os
+            os.unlink(temp_file.name)
+        
+        save_time = time.time() - save_start
+        total_time = time.time() - start_time
+        
+        logger.info(f"✅ Audio saved in {save_time:.2f}s")
+        logger.info(f"🎉 Total generation time: {total_time:.2f}s")
+        logger.info(f"⚡ Speed: {len(text)/total_time:.1f} chars/sec")
+        return audio_bytes
         
     except Exception as e:
         logger.error(f"TTS generation failed: {e}")
@@ -344,26 +436,6 @@ def preprocess_text_for_dia(text: str) -> str:
         # Determine the last speaker and add it
         last_speaker = '[S2]' if '[S2]' in text else '[S1]'
         text = f"{text} {last_speaker}"
-    
-    return text
-
-def generate_placeholder_audio(text: str) -> torch.Tensor:
-    """Generate placeholder audio when the real model fails"""
-    
-    sample_rate = 24000
-    duration = min(len(text) / 10, 30)  # Rough estimate
-    t = np.linspace(0, duration, int(sample_rate * duration))
-    
-    # Generate a more interesting tone that varies based on text
-    frequency = 440 + (hash(text) % 200)
-    audio = 0.3 * np.sin(2 * np.pi * frequency * t)
-    
-    # Add some variation to make it more speech-like
-    audio = audio * (1 + 0.3 * np.sin(2 * np.pi * 2 * t))
-    
-    # Add some envelope to make it more natural
-    envelope = np.exp(-t / (duration * 0.8))  # Fade out
-    audio = audio * envelope
     
     return text
 
