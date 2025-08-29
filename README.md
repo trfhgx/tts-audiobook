@@ -39,10 +39,6 @@ A professional web application for text-to-speech conversion using Chatterbox TT
    pip install -r requirements.txt
    ```
 
-4. Install Chatterbox TTS:
-   ```bash
-   pip install torch torchaudio
-   pip install git+https://github.com/chatterbox-tts/chatterbox
    ```
 
 ### Frontend Setup
