@@ -24,8 +24,8 @@ A professional web application for text-to-speech conversion using Chatterbox TT
 
 1. Clone the repository and navigate to the project directory:
    ```bash
-   git clone [<repository-url>](https://github.com/trfhgx/tts-audiobook)
-   cd audiobook-studio
+   git clone (https://github.com/trfhgx/tts-audiobook)
+   cd /tts-audiobook
    ```
 
 2. Create and activate a Python virtual environment:
